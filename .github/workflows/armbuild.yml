@@ -1,0 +1,84 @@
+name: Auto Build ARM Wheel (High Speed Native)
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "PyPI package name (e.g., manim)"
+        required: true
+      version:
+        description: "Package version (empty = latest)"
+        required: false
+      python:
+        description: "Python selector"
+        required: true
+        default: "cp311-*"
+      arch:
+        description: "CPU architecture"
+        required: true
+        default: "aarch64"
+
+jobs:
+  build:
+    # THIS IS THE MAGIC LINE BRO! Native ARM64 🛠️
+    runs-on: ubuntu-24.04-arm 
+    timeout-minutes: 60 # Way faster now, no need for 3 hours!
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Source Distribution
+        run: |
+          mkdir -p build_dir
+          PKG="${{ github.event.inputs.package }}"
+          VER="${{ github.event.inputs.version }}"
+          if [ -z "$VER" ]; then
+            pip download --no-binary :all: --no-deps -d build_dir "$PKG"
+          else
+            pip download --no-binary :all: --no-deps -d build_dir "$PKG==$VER"
+          fi
+          cd build_dir && tar -xf *.tar.gz
+          # Find the source folder
+          DIR=$(find . -maxdepth 1 -type d -not -path "." | head -n 1)
+          echo "ABS_SRC_PATH=$(pwd)/${DIR#./}" >> $GITHUB_ENV
+
+      - name: Start Heartbeat
+        run: |
+          (
+            while true; do
+              echo "[$(date +%T)] Building natively on ARM... zoom zoom..."
+              sleep 60
+            done
+          ) &
+          echo "HEARTBEAT_PID=$!" >> $GITHUB_ENV
+
+      - name: Build ARM Wheel (cibuildwheel)
+        uses: pypa/cibuildwheel@v2.21.3
+        env:
+          CIBW_ARCHS_LINUX: ${{ github.event.inputs.arch }}
+          CIBW_BUILD: ${{ github.event.inputs.python }}
+          CIBW_SKIP: "*musllinux*"
+          CIBW_BUILD_VERBOSITY: 3
+          # Installing deps INSIDE the ARM container
+          CIBW_BEFORE_BUILD: >
+            pip install -U pip setuptools wheel &&
+            pip install numpy Cython pybind11 meson-python cmake
+          # If Manim needs system libs, we install them here:
+          CIBW_BEFORE_ALL_LINUX: >
+            apt-get update && apt-get install -y 
+            build-essential pkg-config cmake ninja-build 
+            libcairo2-dev libpango1.0-dev libjpeg-dev libpng-dev
+        with:
+          package-dir: ${{ env.ABS_SRC_PATH }}
+
+      - name: Stop Heartbeat
+        if: always()
+        run: kill $HEARTBEAT_PID || true
+
+      - name: Upload Wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.package }}-native-arm
+          path: ./wheelhouse/*.whl
+          
