@@ -1,4 +1,4 @@
-name: Auto Build ARM Wheel + Deps (Complete Bundle)
+name: Auto Build ARM Wheel + All Deps Bundle
 
 on:
   workflow_dispatch:
@@ -20,11 +20,11 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm # Fast Native ARM! 🏎️
+    runs-on: ubuntu-24.04-arm # Native ARM Power! 🏎️
     timeout-minutes: 120
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Download Source Distribution
@@ -34,6 +34,65 @@ jobs:
           VER="${{ github.event.inputs.version }}"
           if [ -z "$VER" ]; then
             pip download --no-binary :all: --no-deps -d build_dir "$PKG"
+          else
+            pip download --no-binary :all: --no-deps -d build_dir "$PKG==$VER"
+          fi
+          cd build_dir && tar -xf *.tar.gz
+          DIR=$(find . -maxdepth 1 -type d -not -path "." | head -n 1)
+          echo "ABS_SRC_PATH=$(pwd)/${DIR#./}" >> $GITHUB_ENV
+
+      - name: Start Heartbeat
+        run: |
+          (
+            while true; do
+              echo "[$(date +%T)] Building natively... don't worry bro, I'm on it..."
+              sleep 60
+            done
+          ) &
+          echo "HEARTBEAT_PID=$!" >> $GITHUB_ENV
+
+      - name: Build Main ARM Wheel (cibuildwheel)
+        uses: pypa/cibuildwheel@v2.21.3
+        env:
+          CIBW_ARCHS_LINUX: ${{ github.event.inputs.arch }}
+          CIBW_BUILD: ${{ github.event.inputs.python }}
+          CIBW_SKIP: "*musllinux*"
+          CIBW_BUILD_VERBOSITY: 3
+          # Using yum for manylinux container compatibility 📦
+          CIBW_BEFORE_ALL_LINUX: >
+            yum install -y gcc gcc-c++ make cmake ninja-build cairo-devel pango-devel libjpeg-turbo-devel libpng-devel
+          CIBW_BEFORE_BUILD: >
+            pip install -U pip setuptools wheel &&
+            pip install numpy Cython pybind11 meson-python cmake
+        with:
+          package-dir: ${{ env.ABS_SRC_PATH }}
+
+      # --- THE BUNDLE COLLECTOR STEP ---
+      - name: Collect All Dependency Wheels
+        run: |
+          mkdir -p final_bundle
+          # 1. Copy our freshly built custom wheel
+          cp wheelhouse/*.whl final_bundle/
+          
+          # 2. Download ARM wheels for all dependencies
+          # We tell pip to specifically grab aarch64 binaries
+          pip download \
+            --only-binary=:all: \
+            --platform manylinux2014_aarch64 \
+            --implementation cp \
+            --python-version 3.11 \
+            --dest final_bundle \
+            ${{ github.event.inputs.package }}${{ github.event.inputs.version && '==' || '' }}${{ github.event.inputs.version }}
+
+      - name: Stop Heartbeat
+        if: always()
+        run: kill $HEARTBEAT_PID || true
+
+      - name: Upload Full Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.package }}-full-arm-bundle
+          path: final_bundle/
           else
             pip download --no-binary :all: --no-deps -d build_dir "$PKG==$VER"
           fi
