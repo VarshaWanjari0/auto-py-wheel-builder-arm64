@@ -1,0 +1,57 @@
+name: Auto build ARM wheel from PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "PyPI package name"
+        required: true
+      version:
+        description: "Package version (leave empty for latest)"
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Enable QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Install build tools
+        run: |
+          pip install --upgrade pip
+          pip install cibuildwheel build
+
+      - name: Download source from PyPI
+        run: |
+          PKG="${{ github.event.inputs.package }}"
+          VER="${{ github.event.inputs.version }}"
+          if [ -z "$VER" ]; then
+            pip download --no-binary :all: "$PKG"
+          else
+            pip download --no-binary :all: "$PKG==$VER"
+          fi
+          tar -xf *.tar.gz
+          SRC_DIR=$(ls -d */ | head -n 1)
+          echo "SRC_DIR=$SRC_DIR" >> $GITHUB_ENV
+
+      - name: Build ARM wheel
+        uses: pypa/cibuildwheel@v2.16.5
+        env:
+          CIBW_ARCHS_LINUX: aarch64
+          CIBW_BUILD: "cp310-* cp311-* cp312-*"
+          CIBW_SKIP: "*musllinux*"
+        with:
+          package-dir: ${{ env.SRC_DIR }}
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm-wheel
+          path: wheelhouse/*.whl
