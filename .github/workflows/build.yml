@@ -1,4 +1,4 @@
-name: Auto Build ARM Wheel (Universal)
+name: Auto Build Python Wheel (Stable + Fast)
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
         required: false
 
       python:
-        description: "Python build selector (example: cp311-*)"
+        description: "Python selector (recommended: cp311-*)"
         required: true
         default: "cp311-*"
 
@@ -22,19 +22,126 @@ on:
         default: "aarch64"
 
       fast:
-        description: "Fast mode (skip tests, old Pythons)"
+        description: "Fast mode (skip tests & old Pythons)"
         required: true
         default: "true"
 
       verbose:
-        description: "Verbose build logs"
+        description: "Verbose logs (debug build failures)"
         required: true
-        default: "false"
+        default: "true"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
+    steps:
+      # --------------------------------------------------
+      # 1. Checkout (empty repo is OK)
+      # --------------------------------------------------
+      - uses: actions/checkout@v4
+
+      # --------------------------------------------------
+      # 2. Python (controller only)
+      # --------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # --------------------------------------------------
+      # 3. Enable ARM emulation
+      # --------------------------------------------------
+      - name: Enable QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # --------------------------------------------------
+      # 4. Cache pip (major speedup)
+      # --------------------------------------------------
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}
+
+      # --------------------------------------------------
+      # 5. System build dependencies (SAFE DEFAULTS)
+      # --------------------------------------------------
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential \
+            pkg-config \
+            cmake \
+            ninja-build \
+            rustc \
+            cargo \
+            ffmpeg \
+            libcairo2-dev \
+            libpango1.0-dev \
+            libjpeg-dev \
+            libpng-dev
+
+      # --------------------------------------------------
+      # 6. Install build tools
+      # --------------------------------------------------
+      - name: Install Python build tools
+        run: |
+          pip install --upgrade pip
+          pip install cibuildwheel build setuptools wheel
+
+      # --------------------------------------------------
+      # 7. Download source from PyPI (pip-like)
+      # --------------------------------------------------
+      - name: Download source tar.gz
+        run: |
+          PKG="${{ github.event.inputs.package }}"
+          VER="${{ github.event.inputs.version }}"
+
+          if [ -z "$VER" ]; then
+            pip download --no-binary :all: "$PKG"
+          else
+            pip download --no-binary :all: "$PKG==$VER"
+          fi
+
+          tar -xf *.tar.gz
+          SRC_DIR=$(ls -d */ | head -n 1)
+          echo "SRC_DIR=$SRC_DIR" >> $GITHUB_ENV
+
+      # --------------------------------------------------
+      # 8. Fast mode (skip tests & old Python)
+      # --------------------------------------------------
+      - name: Apply fast mode
+        if: github.event.inputs.fast == 'true'
+        run: |
+          echo "CIBW_TEST_SKIP=*" >> $GITHUB_ENV
+          echo "CIBW_SKIP=*cp36* *cp37* *cp38* *cp39* *cp310*" >> $GITHUB_ENV
+
+      # --------------------------------------------------
+      # 9. Build ARM wheel (REAL build happens here)
+      # --------------------------------------------------
+      - name: Build ARM wheel
+        uses: pypa/cibuildwheel@v2.16.5
+        env:
+          CIBW_ARCHS_LINUX: ${{ github.event.inputs.arch }}
+          CIBW_BUILD: ${{ github.event.inputs.python }}
+          CIBW_SKIP: "*musllinux*"
+          CIBW_BUILD_VERBOSITY: ${{ github.event.inputs.verbose == 'true' && '3' || '1' }}
+          PIP_PROGRESS_BAR: off
+          PIP_VERBOSE: 1
+        with:
+          package-dir: ${{ env.SRC_DIR }}
+
+      # --------------------------------------------------
+      # 10. Upload result
+      # --------------------------------------------------
+      - name: Upload ARM wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm-wheel
+          path: wheelhouse/*.whl    timeout-minutes: 120
 
     steps:
       # --------------------------------------------------
