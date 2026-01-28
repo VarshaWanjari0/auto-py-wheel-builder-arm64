@@ -1,39 +1,54 @@
-name: Full-Dep Termux Factory
+name: Universal Termux Factory
 
 on:
   workflow_dispatch:
     inputs:
       package_name:
-        description: 'Main package to build (e.g., manim)'
+        description: 'Main package to build'
         required: true
         default: 'manim'
       system_deps:
-        description: 'System libs needed for compilation (e.g., libcairo2-dev libpango1.0-dev)'
+        description: 'System libs (pkg install style)'
         required: false
-        default: 'libcairo2-dev libpango1.0-dev ffmpeg libffi-dev'
+        default: 'libcairo libpango ffmpeg libffi'
 
 jobs:
   build_everything:
     runs-on: ubuntu-latest
-    container: 
+    container:
       image: termux/termux-docker:aarch64
+      # This is the secret sauce to stop the "not running" error ⬇️
+      options: --tty 
     
     steps:
+      - uses: actions/checkout@v4
+
       - name: Sync Termux Environment
         run: |
-          # Prepare the environment with all native tools
-          pkg update -y
+          # The container starts fresh, so we gotta wake it up
+          yes | pkg upgrade -y
           pkg install python python-pip build-essential binutils ${{ github.event.inputs.system_deps }} -y
           pip install --upgrade pip wheel setuptools
 
-      - name: Build Main PKG and All Deps
+      - name: Build All Dependencies as Wheels
         run: |
           mkdir -p ./build_output
-          # This command is the 'Beast Mode'
-          # --no-binary :all: ensures we don't accidentally grab a Glibc wheel
-          # It forces a rebuild from source for EVERYTHING in the dependency tree
+          # We force it to build from source so it's 100% Bionic/Termux compatible
+          # This will recursively find every dep and turn it into a .whl
           pip wheel ${{ github.event.inputs.package_name }} \
             --wheel-dir ./build_output \
+            --no-binary :all:
+
+      - name: Archive the Loot
+        run: |
+          # Using tar because it's usually pre-installed and faster
+          tar -cvf ${{ github.event.inputs.package_name }}_bundle.tar ./build_output
+
+      - name: Upload Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.package_name }}-termux-bundle
+          path: ./*.tar
             --no-binary :all:
 
       - name: Package the Loot
