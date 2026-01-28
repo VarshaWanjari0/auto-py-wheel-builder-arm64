@@ -1,39 +1,38 @@
-name: Auto Build ARM Wheel (Beta)
+name: Fast Termux Native Build
 
-on:
-  workflow_dispatch:
-    inputs:
-      package:
-        description: "PyPI package name"
-        required: true
-      version:
-        description: "Package version (empty = latest)"
-        required: false
-      python:
-        description: "Python selector"
-        required: true
-        default: "cp311-*"
-      arch:
-        description: "CPU architecture"
-        required: true
-        default: "aarch64"
+on: [push]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Android NDK
+        uses: nndixon/setup-android-ndk@v1
         with:
-          python-version: "3.11"
+          ndk-version: r26b # Latest stable for Bionic support
 
-      - name: Enable QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Install Termux Toolchain
+        run: |
+          # We use the NDK to create a standalone toolchain for Termux
+          export CC=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
+          export CXX=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang++
+          echo "CC=$CC" >> $GITHUB_ENV
+          echo "CXX=$CXX" >> $GITHUB_ENV
 
+      - name: Build Wheel
+        run: |
+          pip install wheel
+          # We tell the build system specifically to target Android
+          # This avoids the 'manylinux' GLIBC errors entirely
+          python setup.py bdist_wheel --plat-name=android_aarch64
+
+      - name: Upload Fast Wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-termux-wheel
+          path: dist/*.whl
       # --------------------------------------------------
       # System deps (heavy ones upfront)
       # --------------------------------------------------
