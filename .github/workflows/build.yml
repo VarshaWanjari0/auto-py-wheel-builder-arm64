@@ -17,24 +17,32 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # This is the crucial fix for "exec format error" ⬇️
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Build in Termux Container
         run: |
+          # We use --platform linux/arm64 to force the architecture
           docker run --rm --platform linux/arm64 \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             termux/termux-docker:aarch64 \
-            bash -c "pkg update -y && pkg upgrade -y && pkg install python python-pip build-essential binutils libandroid-support ${{ github.event.inputs.system_deps }} -y && pip install --upgrade pip wheel setuptools && mkdir -p ./build_output && pip wheel ${{ github.event.inputs.package_name }} --wheel-dir ./build_output --no-binary :all: -v"
+            bash -c "pkg update -y && pkg install python python-pip build-essential binutils libandroid-support ${{ github.event.inputs.system_deps }} -y && pip install --upgrade pip wheel setuptools && mkdir -p ./build_output && pip wheel ${{ github.event.inputs.package_name }} --wheel-dir ./build_output --no-binary :all: -v"
 
-      - name: Archive the Loot
-        run: tar -cvf build_bundle.tar ./build_output
+      - name: Archive and Upload
+        if: always() # Run even if previous step failed to see logs
+        run: |
+          if [ -d "./build_output" ]; then
+            tar -cvf build_bundle.tar ./build_output
+          else
+            echo "No build output found!"
+          fi
 
       - name: Upload Bundle
         uses: actions/upload-artifact@v4
