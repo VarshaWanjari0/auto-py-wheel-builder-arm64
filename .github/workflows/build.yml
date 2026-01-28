@@ -1,39 +1,52 @@
-name: Fast Termux Native Build
+name: Full-Dep Termux Factory
 
-on: [push]
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: 'Main package to build (e.g., manim)'
+        required: true
+        default: 'manim'
+      system_deps:
+        description: 'System libs needed for compilation (e.g., libcairo2-dev libpango1.0-dev)'
+        required: false
+        default: 'libcairo2-dev libpango1.0-dev ffmpeg libffi-dev'
 
 jobs:
-  build:
+  build_everything:
     runs-on: ubuntu-latest
+    container: 
+      image: termux/termux-docker:aarch64
+    
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Android NDK
-        uses: nndixon/setup-android-ndk@v1
-        with:
-          ndk-version: r26b # Latest stable for Bionic support
-
-      - name: Install Termux Toolchain
+      - name: Sync Termux Environment
         run: |
-          # We use the NDK to create a standalone toolchain for Termux
-          export CC=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
-          export CXX=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang++
-          echo "CC=$CC" >> $GITHUB_ENV
-          echo "CXX=$CXX" >> $GITHUB_ENV
+          # Prepare the environment with all native tools
+          pkg update -y
+          pkg install python python-pip build-essential binutils ${{ github.event.inputs.system_deps }} -y
+          pip install --upgrade pip wheel setuptools
 
-      - name: Build Wheel
+      - name: Build Main PKG and All Deps
         run: |
-          pip install wheel
-          # We tell the build system specifically to target Android
-          # This avoids the 'manylinux' GLIBC errors entirely
-          python setup.py bdist_wheel --plat-name=android_aarch64
+          mkdir -p ./build_output
+          # This command is the 'Beast Mode'
+          # --no-binary :all: ensures we don't accidentally grab a Glibc wheel
+          # It forces a rebuild from source for EVERYTHING in the dependency tree
+          pip wheel ${{ github.event.inputs.package_name }} \
+            --wheel-dir ./build_output \
+            --no-binary :all:
 
-      - name: Upload Fast Wheel
+      - name: Package the Loot
+        run: |
+          # Zip everything together so you get one clean file
+          apt-get install zip -y
+          zip -r ${{ github.event.inputs.package_name }}_complete_bundle.zip ./build_output
+
+      - name: Upload Bundle
         uses: actions/upload-artifact@v4
         with:
-          name: fast-termux-wheel
-          path: dist/*.whl
-      # --------------------------------------------------
+          name: ${{ github.event.inputs.package_name }}-bundle
+          path: ./*.zip
       # System deps (heavy ones upfront)
       # --------------------------------------------------
       - name: Install system dependencies
