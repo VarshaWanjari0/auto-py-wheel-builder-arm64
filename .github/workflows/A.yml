@@ -1,9 +1,12 @@
 name: Ultimate Aarch64 Build
-on: [workflow_dispatch]
+
+on:
+  workflow_dispatch:
 
 jobs:
   build_android:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
@@ -11,49 +14,74 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y g++-aarch64-linux-gnu gcc-aarch64-linux-gnu \
-          build-essential cmake golang-go unzip wget pkg-config
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            build-essential \
+            cmake \
+            golang-go \
+            unzip \
+            wget \
+            pkg-config \
+            autoconf \
+            automake \
+            libtool \
+            perl
 
       - name: Build dependencies & Curl
         run: |
+          set -e
+
           export CC=aarch64-linux-gnu-gcc
           export CXX=aarch64-linux-gnu-g++
           export ARCH=aarch64
-          
-          # 1. Build BoringSSL
+          export PREFIX=$GITHUB_WORKSPACE/deps
+          mkdir -p "$PREFIX"
+
+          echo "===== Building BoringSSL ====="
           git clone --depth 1 https://boringssl.googlesource.com/boringssl
-          cd boringssl && mkdir build && cd build
-          cmake -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-                -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-                -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-                ..
+          cd boringssl
+          mkdir build && cd build
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=$CC \
+            -DCMAKE_CXX_COMPILER=$CXX
           make -j$(nproc)
           cd ../../
 
-          # 2. Build nghttp2
+          echo "===== Building nghttp2 ====="
           wget https://github.com/nghttp2/nghttp2/releases/download/v1.58.0/nghttp2-1.58.0.tar.gz
-          tar -xf nghttp2-1.58.0.tar.gz
+          tar xf nghttp2-1.58.0.tar.gz
           cd nghttp2-1.58.0
-          ./configure --host=aarch64-linux-gnu --enable-static --disable-shared --prefix=$GITHUB_WORKSPACE/deps
-          make -j$(nproc) install
+          ./configure \
+            --host=aarch64-linux-gnu \
+            --enable-static \
+            --disable-shared \
+            --prefix=$PREFIX
+          make -j$(nproc)
+          make install
           cd ..
 
-          # 3. FIX: Get Patches and Build Curl
-          # We clone the impersonate repo just for the patches
+          echo "===== Building curl (impersonate) ====="
           git clone --depth 1 https://github.com/lwthiker/curl-impersonate.git
-          
+
           wget https://github.com/curl/curl/releases/download/curl-8_1_2/curl-8.1.2.tar.gz
-          tar -xf curl-8.1.2.tar.gz
+          tar xf curl-8.1.2.tar.gz
           cd curl-8.1.2
-          
-          # Apply the patch using the correct path
+
           patch -p1 < ../curl-impersonate/chrome/patches/curl-impersonate.patch
-          
-          ./configure --host=aarch64-linux-gnu \
-                      --with-openssl=$GITHUB_WORKSPACE/boringssl \
-                      --with-nghttp2=$GITHUB_WORKSPACE/deps \
-                      --enable-static --disable-shared \
-                      --prefix=$GITHUB_WORKSPACE/out
+
+          ./buildconf
+
+          ./configure \
+            --host=aarch64-linux-gnu \
+            --with-openssl=$GITHUB_WORKSPACE/boringssl \
+            --with-nghttp2=$PREFIX \
+            --enable-static \
+            --disable-shared \
+            --prefix=$GITHUB_WORKSPACE/out
+
           make -j$(nproc)
           make install
 
@@ -62,35 +90,3 @@ jobs:
         with:
           name: curl-impersonate-aarch64
           path: out/bin/curl
-          ./configure --host=aarch64-linux-gnu \
-                      --with-openssl=$GITHUB_WORKSPACE/boringssl \
-                      --with-nghttp2=$GITHUB_WORKSPACE/deps \
-                      --enable-static --disable-shared \
-                      --prefix=$GITHUB_WORKSPACE/out
-          make -j$(nproc)
-          make install
-          ./configure --host=aarch64-linux-gnu --enable-static --disable-shared --prefix=$GITHUB_WORKSPACE/deps
-          make -j$(nproc) install
-          cd ..
-
-          # 3. Build the Patched Curl (The identity)
-          wget https://github.com/curl/curl/releases/download/curl-8_1_2/curl-8.1.2.tar.gz
-          tar -xf curl-8.1.2.tar.gz
-          cd curl-8.1.2
-          # Applying the impersonate patch from your repo
-          patch -p1 < ../chrome/patches/curl-impersonate.patch
-          
-          ./configure --host=aarch64-linux-gnu \
-                      --with-openssl=$GITHUB_WORKSPACE/boringssl \
-                      --with-nghttp2=$GITHUB_WORKSPACE/deps \
-                      --enable-static --disable-shared \
-                      --prefix=$GITHUB_WORKSPACE/out
-          make -j$(nproc)
-          make install
-
-      - name: Upload Final Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: curl-impersonate-aarch64
-          path: out/bin/curl
-          
