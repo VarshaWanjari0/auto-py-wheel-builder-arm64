@@ -1,10 +1,26 @@
+name: Ultimate Aarch64 Build
+on: [workflow_dispatch]
+
+jobs:
+  build_android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-aarch64-linux-gnu gcc-aarch64-linux-gnu \
+          build-essential cmake golang-go unzip wget pkg-config
+
       - name: Build dependencies & Curl
         run: |
           export CC=aarch64-linux-gnu-gcc
           export CXX=aarch64-linux-gnu-g++
           export ARCH=aarch64
           
-          # 1. [span_1](start_span)Build BoringSSL (Keep this, it was working!)[span_1](end_span)
+          # 1. Build BoringSSL
           git clone --depth 1 https://boringssl.googlesource.com/boringssl
           cd boringssl && mkdir build && cd build
           cmake -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
@@ -14,7 +30,7 @@
           make -j$(nproc)
           cd ../../
 
-          # 2. [span_2](start_span)Build nghttp2[span_2](end_span)
+          # 2. Build nghttp2
           wget https://github.com/nghttp2/nghttp2/releases/download/v1.58.0/nghttp2-1.58.0.tar.gz
           tar -xf nghttp2-1.58.0.tar.gz
           cd nghttp2-1.58.0
@@ -22,18 +38,30 @@
           make -j$(nproc) install
           cd ..
 
-          # 3. [span_3](start_span)FIX: Build the Patched Curl[span_3](end_span)
-          # FIRST: Get the actual patches from the impersonate repo
+          # 3. FIX: Get Patches and Build Curl
+          # We clone the impersonate repo just for the patches
           git clone --depth 1 https://github.com/lwthiker/curl-impersonate.git
           
-          # SECOND: Get Curl
           wget https://github.com/curl/curl/releases/download/curl-8_1_2/curl-8.1.2.tar.gz
           tar -xf curl-8.1.2.tar.gz
           cd curl-8.1.2
           
-          # THIRD: Apply the patch correctly from the repo we just cloned
+          # Apply the patch using the correct path
           patch -p1 < ../curl-impersonate/chrome/patches/curl-impersonate.patch
           
+          ./configure --host=aarch64-linux-gnu \
+                      --with-openssl=$GITHUB_WORKSPACE/boringssl \
+                      --with-nghttp2=$GITHUB_WORKSPACE/deps \
+                      --enable-static --disable-shared \
+                      --prefix=$GITHUB_WORKSPACE/out
+          make -j$(nproc)
+          make install
+
+      - name: Upload Final Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: curl-impersonate-aarch64
+          path: out/bin/curl
           ./configure --host=aarch64-linux-gnu \
                       --with-openssl=$GITHUB_WORKSPACE/boringssl \
                       --with-nghttp2=$GITHUB_WORKSPACE/deps \
